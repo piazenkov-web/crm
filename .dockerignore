@@ -1,0 +1,12 @@
+.git
+.env
+data
+__pycache__
+*.tar.gz
+tests
+README.md
+.venv
+backups
+site
+telegram-project-review
+crm-preview.jpg
