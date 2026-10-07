@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8000"
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--limit-concurrency", "32", "--proxy-headers", "--forwarded-allow-ips", "172.29.44.3"]
+    networks:
+      - default
+      - tunnel-net
     environment:
       CRM_PASSWORD: ${CRM_PASSWORD:?Set CRM_PASSWORD in .env}
       DATA_DIR: /data
@@ -17,5 +21,21 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: terra-crm-tunnel
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--url", "http://crm:8000"]
+    networks:
+      tunnel-net:
+        ipv4_address: 172.29.44.3
+    depends_on:
+      - crm
+    mem_limit: 128m
 volumes:
   crm-data:
+networks:
+  tunnel-net:
+    ipam:
+      config:
+        - subnet: 172.29.44.0/24

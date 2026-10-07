@@ -5,3 +5,6 @@ __pycache__/
 *.zip
 .venv/
 crm-preview.jpg
+audit-before.json
+audit-after.json
+reports/*.jpg

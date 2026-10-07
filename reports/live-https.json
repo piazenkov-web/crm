@@ -1,0 +1,39 @@
+{
+  "passed": 26,
+  "checks": [
+    "anonymous access rejected",
+    "login",
+    "secure session cookie",
+    "GET clients",
+    "GET tasks",
+    "GET documents",
+    "create client",
+    "update client",
+    "create task",
+    "complete task",
+    "email rejected",
+    "date rejected",
+    "upload",
+    "download byte equality",
+    "anonymous download rejected",
+    "archive client",
+    "linked document hidden",
+    "restore client",
+    "linked document restored",
+    "50 reads, concurrency 5",
+    "GET clients",
+    "baseline unchanged: clients",
+    "GET tasks",
+    "baseline unchanged: tasks",
+    "GET documents",
+    "baseline unchanged: documents"
+  ],
+  "requests": 50,
+  "concurrency": 5,
+  "latency_ms": {
+    "median": 196.1,
+    "p95": 235.6,
+    "max": 491.2
+  },
+  "cleanup": "Own QA fixtures archived; existing records unchanged"
+}

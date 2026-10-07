@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -25,6 +26,7 @@ ATTEMPTS = {}
 LOCK = threading.Lock()
 STAGES = ['Новый лид', 'В работе', 'Документы', 'В банке', 'Одобрено', 'Сделка', 'Отказ']
 STATUSES = ['Новая', 'В работе', 'Готово']
+CATEGORIES = ['Паспорт', 'Доход', 'Недвижимость', 'Анкета', 'Другое']
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 @contextmanager
@@ -48,7 +50,8 @@ with db() as c:
 
 @app.middleware('http')
 async def auth(request: Request, call_next):
-    if request.url.path.startswith('/api/') and request.url.path != '/api/login':
+    path = request.scope['path']
+    if path.startswith('/api/') and path != '/api/login':
         token = request.cookies.get('crm_session', '')
         with LOCK:
             expires = SESSIONS.get(token, 0)
@@ -61,8 +64,10 @@ async def auth(request: Request, call_next):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-    if request.url.path.startswith('/api/'):
+    if path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
+    else:
+        response.headers['Cache-Control'] = 'no-cache'
     return response
 
 class Login(BaseModel):
@@ -172,13 +177,19 @@ def save(table, body, id=None):
         raise HTTPException(422, 'Название не может быть пустым')
     if table == 'clients' and values['stage'] not in STAGES:
         raise HTTPException(422, 'Неизвестный этап')
+    if table == 'clients':
+        values['email'] = values['email'].strip()
+        if values['email'] and not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', values['email']):
+            raise HTTPException(422, 'Укажите корректный email')
     if table == 'tasks':
         if values['status'] not in STATUSES or values['priority'] not in ['Обычный', 'Высокий', 'Срочно']:
             raise HTTPException(422, 'Неизвестный статус или приоритет')
         if values['due']:
             from datetime import date
             try:
-                date.fromisoformat(values['due'])
+                parsed = date.fromisoformat(values['due'])
+                if parsed.isoformat() != values['due']:
+                    raise ValueError()
             except ValueError:
                 raise HTTPException(422, 'Неверная дата')
     with db() as c:
@@ -223,6 +234,8 @@ def archive(entity: str, id: int):
 
 @app.post('/api/documents')
 async def upload(client_id: int = Form(...), category: str = Form('Другое', max_length=100), file: UploadFile = File(...)):
+    if category not in CATEGORIES:
+        raise HTTPException(422, 'Неизвестная категория документа')
     with db() as c:
         client_exists(c, client_id)
     name = (file.filename or 'document').replace('\\', '/').split('/')[-1][:200]
@@ -266,3 +279,42 @@ def health():
     return {'status': 'ok'}
 
 app.mount('/', StaticFiles(directory='static', html=True), name='static')
+
+class RequestSizeLimit:
+    """Bound body bytes before multipart parsing, including chunked requests."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            return await self.app(scope, receive, send)
+        limit = 11 * 1024 * 1024
+        headers = dict(scope.get('headers', []))
+        length = headers.get(b'content-length', b'0')
+        try:
+            oversized = int(length) > limit
+        except ValueError:
+            oversized = True
+        if oversized:
+            return await JSONResponse({'detail': 'Максимальный размер запроса — 11 МБ'}, status_code=413)(scope, receive, send)
+        total = 0
+
+        async def bounded_receive():
+            nonlocal total
+            message = await receive()
+            if message['type'] == 'http.request':
+                total += len(message.get('body', b''))
+                if total > limit:
+                    raise HTTPException(413, 'Максимальный размер запроса — 11 МБ')
+            return message
+
+        async def bounded_send(message):
+            if total > limit:
+                if message['type'] == 'http.response.start':
+                    await JSONResponse({'detail': 'Максимальный размер запроса — 11 МБ'}, status_code=413)(scope, receive, send)
+                return
+            await send(message)
+
+        await self.app(scope, bounded_receive, bounded_send)
+
+app.add_middleware(RequestSizeLimit)
