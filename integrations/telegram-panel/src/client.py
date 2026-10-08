@@ -1,0 +1,1181 @@
+import os
+import time
+import logging
+import asyncio
+import json
+from datetime import datetime
+from telethon import TelegramClient, events, Button
+from telethon.errors import SessionPasswordNeededError, FloodWaitError
+from telethon.tl.types import Channel, Chat
+from src.config import ConfigManager, API_ID, API_HASH, ADMIN_ID, CHANNEL_ID, CLIENTS_JSON_PATH, RATE_LIMIT_SLEEP, GROUPS_BATCH_SIZE, GROUPS_UPDATE_SLEEP, REPORT_CHECK_BOT
+from src.keyboards import Keyboard
+from src.validation import InputValidator
+from src.utils import send_error_message, extract_account_name, prompt_for_input, is_session_revoked_error, remove_revoked_session_completely, sanitize_session_name, get_safe_session_file_path
+
+
+# Set up logger for the SessionManager class
+logger = logging.getLogger(__name__)
+
+class SessionManager:
+    def __init__(self, config, active_clients, tbot):
+        """
+        Initialize the SessionManager to handle Telegram client sessions.
+        :param config: Configuration dictionary for client sessions.
+        :param active_clients: Dictionary of active clients mapped by session names.
+        :param tbot: Telegram bot instance for sending messages.
+        """
+        try:
+            self.config = config
+            self.active_clients = active_clients
+            self.tbot = tbot
+            # Use ConfigManager to manage client configurations
+            self.config_manager = ConfigManager("clients.json", self.config)
+            logger.info("SessionManager initialized successfully.")
+        except Exception as e:
+            logger.critical(f"Error initializing SessionManager: {e}")
+            raise
+
+    async def detect_sessions(self):
+        """
+        Detect and load Telegram client sessions from the configuration.
+        Adds sessions to `active_clients` if they are not already active.
+        Note: This method is now async to support proper locking.
+        """
+        try:
+            if not isinstance(self.config.get('clients', {}), dict):
+                logger.warning("'clients' is not a dictionary. Initializing it as an empty dictionary.")
+                self.config['clients'] = {}
+
+            # Always use lock for thread-safety - raise error if lock is not available
+            if not hasattr(self.tbot, 'active_clients_lock'):
+                logger.error("active_clients_lock not available in tbot. This should not happen in production.")
+                raise RuntimeError("active_clients_lock not initialized")
+            
+            async with self.tbot.active_clients_lock:
+                for session_name in list(self.config['clients']):
+                    if session_name not in self.active_clients:
+                        # Sanitize session name before use
+                        try:
+                            sanitized_name = sanitize_session_name(session_name)
+                        except ValueError as e:
+                            logger.warning(f"Invalid session name '{session_name}' skipped: {e}")
+                            continue
+                        
+                        # Initialize Telegram client for the session
+                        client = TelegramClient(sanitized_name, API_ID, API_HASH)
+                        self.active_clients[sanitized_name] = client
+                        # Update config key if sanitized name differs
+                        if sanitized_name != session_name:
+                            if sanitized_name not in self.config['clients']:
+                                self.config['clients'][sanitized_name] = self.config['clients'][session_name]
+                            del self.config['clients'][session_name]
+                            self.config_manager.save_config(self.config)
+            
+            logger.info("Sessions detected and loaded successfully.")
+        except Exception as e:
+            logger.error(f"Error detecting sessions: {e}")
+
+    async def start_saved_clients(self):
+        """
+        Start all Telegram client sessions listed in the configuration.
+        Ensures clients are authorized and ready to use.
+
+        Account Persistence Behavior:
+        - Accounts persist in clients.json and .session files
+        - Only true SessionRevokedError sessions are deleted
+        - Temporary network/API errors don't delete sessions
+        - Accounts remain available for future use
+        - Inactive accounts are tracked for admin review
+        """
+        try:
+            # Load session information into active_clients
+            await self.detect_sessions()
+
+            # Initialize inactive accounts tracking
+            if 'inactive_accounts' not in self.config:
+                self.config['inactive_accounts'] = {}
+
+            for session_name, client in list(self.active_clients.items()):
+                try:
+                    # Connect client if not already connected
+                    if not client.is_connected():
+                        await client.connect()
+
+                    # Check if the client is authorized
+                    if await client.is_user_authorized():
+                        logger.info(f"Successfully loaded and authorized client: {session_name}")
+                        # Remove from inactive list if it was there
+                        if session_name in self.config['inactive_accounts']:
+                            del self.config['inactive_accounts'][session_name]
+                            self.config_manager.save_config(self.config)
+                        # Ensure session is saved after successful authorization
+                        client.session.save()
+                    else:
+                        # Client reported as unauthorized - check if it's really revoked
+                        logger.warning(f"Client {session_name} reported as unauthorized. Checking if it's really revoked...")
+
+                        try:
+                            # Try to get a simple dialog to check if session is really revoked
+                            await client.get_dialogs(limit=1)
+                            logger.info(f"Client {session_name} can still access dialogs despite is_user_authorized() returning False. Keeping in active list.")
+                            # Keep the client in active list since it can still function
+                        except Exception as check_error:
+                            check_error_msg = str(check_error).lower()
+                            logger.warning(f"Client {session_name} failed dialog check: {check_error_msg}")
+
+                            # Only consider it truly revoked if we get explicit session errors
+                            if ('session' in check_error_msg and ('revoked' in check_error_msg or 'invalid' in check_error_msg)) or 'auth' in check_error_msg:
+                                logger.warning(f"Client {session_name} has true SessionRevokedError. Removing permanently...")
+                                logger.warning(f"This happens when: 1) Account password changed, 2) Account logged out from official app, 3) Telegram security measures")
+                                # Remove from active clients first
+                                async with self.tbot.active_clients_lock:
+                                    if session_name in self.tbot.active_clients:
+                                        del self.tbot.active_clients[session_name]
+                                await client.disconnect()
+                                await self.delete_session(session_name)
+                                logger.info(f"Unauthorized session {session_name} has been completely removed")
+                            else:
+                                # Not a true session revoked error, but client is having issues
+                                # KEEP IT IN ACTIVE LIST - don't remove it!
+                                logger.warning(f"Client {session_name} has connectivity issues but not revoked. Keeping in active list for retry.")
+                                # IMPORTANT: Keep the client in active_clients even if it has issues
+                                # This allows it to be retried later
+
+                    # Sleep to avoid hitting Telegram flood limits
+                    await asyncio.sleep(3)
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    logger.warning(f"Error loading client {session_name}: {e}")
+
+                    # Only move to inactive for very specific errors
+                    # Most errors should be retried rather than making accounts inactive
+                    if 'session revoked' in error_msg or 'auth' in error_msg or 'invalid' in error_msg:
+                        # True authentication/session errors
+                        logger.warning(f"Client {session_name} has authentication issues. Moving to inactive.")
+                        async with self.tbot.active_clients_lock:
+                            removed_client = self.tbot.active_clients.pop(session_name, None)
+                        # Disconnect outside the lock to release the connection
+                        # opened earlier (avoids leaking the socket/reader task).
+                        if removed_client is not None:
+                            try:
+                                await removed_client.disconnect()
+                            except Exception as disc_err:
+                                logger.debug(f"Error disconnecting {session_name}: {disc_err}")
+
+                        if session_name not in self.config['inactive_accounts']:
+                            import time as time_module
+                            self.config['inactive_accounts'][session_name] = {
+                                'phone': session_name,
+                                'last_seen': time_module.time(),
+                                'reason': 'auth_error',
+                                'error_details': str(e)
+                            }
+                            self.config_manager.save_config(self.config)
+                    else:
+                        # Temporary errors - keep trying, don't make inactive
+                        logger.warning(f"Temporary error with client {session_name}: {e}. Will retry on next startup.")
+                        # IMPORTANT: DO NOT remove from active_clients for temporary errors
+                        # Keep it in active_clients so it can be retried
+                        logger.info(f"Keeping {session_name} in active_clients despite temporary error for future retry")
+        except Exception as e:
+            logger.error(f"Error in start_saved_clients: {e}")
+
+    async def show_inactive_accounts(self, event):
+        """
+        Display list of inactive accounts for admin review.
+        """
+        try:
+            logger.info("show_inactive_accounts called")
+
+            # Initialize inactive accounts if not exists
+            if 'inactive_accounts' not in self.config:
+                self.config['inactive_accounts'] = {}
+
+            inactive_accounts = self.config['inactive_accounts']
+
+            if not inactive_accounts:
+                await event.respond("No inactive accounts found. All accounts are working properly.")
+                return
+
+            # Build response message
+            message = "**Inactive Accounts Report**\n\n"
+            message += f"Total inactive accounts: {len(inactive_accounts)}\n\n"
+
+            for phone, account_info in inactive_accounts.items():
+                reason = account_info.get('reason', 'unknown')
+                last_seen = account_info.get('last_seen', 0)
+                error_details = account_info.get('error_details', 'No details available')
+
+                # Format timestamp
+                import time
+                last_seen_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_seen))
+
+                message += f"**{phone}**\n"
+                message += f"   Reason: {reason}\n"
+                message += f"   Last seen: {last_seen_str}\n"
+                message += f"   Error: {error_details[:100]}{'...' if len(error_details) > 100 else ''}\n\n"
+
+            # Add management options
+            message += "**Management Options:**\n"
+            message += "• Use /start to return to main menu\n"
+            message += "• Inactive accounts will be automatically reactivated when possible"
+
+            # Send message (split if too long)
+            if len(message) > 4000:
+                # Split into chunks
+                chunks = []
+                current_chunk = ""
+                lines = message.split('\n')
+
+                for line in lines:
+                    if len(current_chunk + line + '\n') > 4000:
+                        chunks.append(current_chunk)
+                        current_chunk = line + '\n'
+                    else:
+                        current_chunk += line + '\n'
+
+                if current_chunk:
+                    chunks.append(current_chunk)
+
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await event.respond(chunk)
+                    else:
+                        await event.respond(f"(Part {i+1}/{len(chunks)})\n{chunk}")
+            else:
+                await event.respond(message)
+
+        except Exception as e:
+            logger.error(f"Error in show_inactive_accounts: {e}")
+            await event.respond("Error retrieving inactive accounts list.")
+
+    async def reactivate_account(self, event, phone_number):
+        """
+        Attempt to reactivate an inactive account.
+        """
+        try:
+            logger.info(f"reactivate_account called for {phone_number}")
+
+            if 'inactive_accounts' not in self.config or phone_number not in self.config['inactive_accounts']:
+                await event.respond(f"Account {phone_number} is not in inactive accounts list.")
+                return
+
+            # Remove from inactive list and try to reload
+            del self.config['inactive_accounts'][phone_number]
+            self.config_manager.save_config(self.config)
+
+            # Try to reload the account
+            try:
+                session_file = get_safe_session_file_path(phone_number)
+            except ValueError as e:
+                logger.error(f"Invalid phone number for session file: {e}")
+                await event.respond(f"Invalid phone number format.")
+                return
+            
+            if os.path.exists(session_file):
+                try:
+                    # Create new client instance
+                    from telethon import TelegramClient
+                    from src.config import API_ID, API_HASH
+
+                    # Sanitize phone number for use as session name
+                    try:
+                        sanitized_phone = sanitize_session_name(phone_number)
+                    except ValueError as e:
+                        logger.error(f"Invalid phone number for session name: {e}")
+                        await event.respond(f"Invalid phone number format.")
+                        return
+                    
+                    client = TelegramClient(sanitized_phone, API_ID, API_HASH)
+
+                    # Try to connect and authorize
+                    await client.connect()
+                    if await client.is_user_authorized():
+                        # Use the sanitized name as the key, consistent with
+                        # detect_sessions/finalize_client_setup and the actual
+                        # session file Telethon opens.
+                        async with self.tbot.active_clients_lock:
+                            self.tbot.active_clients[sanitized_phone] = client
+
+                        # Add back to config without wiping any previously
+                        # discovered groups/metadata for this account.
+                        if 'clients' not in self.config:
+                            self.config['clients'] = {}
+                        self.config['clients'].setdefault(sanitized_phone, [])
+                        self.config_manager.save_config(self.config)
+
+                        await event.respond(f"Account {phone_number} successfully reactivated!")
+                        logger.info(f"Account {phone_number} reactivated successfully")
+                    else:
+                        await client.disconnect()
+                        await event.respond(f"Account {phone_number} is still not authorized. Cannot reactivate.")
+                        logger.warning(f"Account {phone_number} still not authorized during reactivation")
+
+                except Exception as e:
+                    logger.error(f"Error reactivating account {phone_number}: {e}")
+                    await event.respond(f"Error reactivating account {phone_number}: {str(e)}")
+            else:
+                await event.respond(f"Session file for {phone_number} not found.")
+                logger.warning(f"Session file {session_file} not found during reactivation")
+
+        except Exception as e:
+            logger.error(f"Error in reactivate_account: {e}")
+            await event.respond("Error during account reactivation.")
+
+    async def disconnect_all_clients(self):
+        """
+        Disconnect all active Telegram clients and clear the active client list.
+        """
+        try:
+            for session_name, client in list(self.active_clients.items()):
+                try:
+                    # Cleanup handlers before disconnecting to prevent memory leaks
+                    if hasattr(self.tbot, 'monitor'):
+                        self.tbot.monitor.cleanup_client_handlers(client)
+                    await client.disconnect()
+                    logger.info(f"Client {session_name} disconnected successfully.")
+                except Exception as e:
+                    logger.error(f"Error disconnecting client {session_name}: {e}")
+            
+            # Clear the active_clients dictionary
+            self.active_clients.clear()
+            logger.info("All clients disconnected successfully.")
+        except Exception as e:
+            logger.error(f"Error disconnecting clients: {e}")
+
+    async def delete_session(self, session_name):
+        """
+        Delete a session file and remove it from the configuration.
+        :param session_name: The name of the session to delete.
+        """
+        try:
+            if session_name in self.active_clients:
+                client = self.active_clients[session_name]
+                # Cleanup handlers before disconnecting
+                if hasattr(self.tbot, 'monitor'):
+                    self.tbot.monitor.cleanup_client_handlers(client)
+                await client.disconnect()
+                del self.active_clients[session_name]
+                logger.info(f"Client {session_name} disconnected and removed from active clients.")
+
+            if session_name in self.config['clients']:
+                del self.config['clients'][session_name]
+                self.config_manager.save_config(self.config)
+
+                try:
+                    session_file = get_safe_session_file_path(session_name)
+                    if os.path.exists(session_file):
+                        try:
+                            os.remove(session_file)
+                            logger.info(f"Session file {session_file} deleted successfully.")
+                        except OSError as e:
+                            # File is in use by another process - this is normal
+                            logger.warning(f"Session file {session_file} could not be deleted (in use by another process): {e}")
+                            logger.info(f"Session {session_name} removed from config but file remains (will be cleaned up later)")
+                except ValueError as e:
+                    logger.error(f"Invalid session name for deletion: {e}")
+
+                # Session deleted successfully - no need to send message as callback handler will respond
+                logger.info(f"Session {session_name} deleted successfully.")
+            else:
+                logger.warning(f"Session {session_name} not found in configuration.")
+        except Exception as e:
+            logger.error(f"Error deleting session {session_name}: {e}")
+            # Don't send error message here - let the callback handler handle it
+
+
+class AccountHandler:
+    """
+    Handles all account-related operations for the Telegram bot.
+    Manages account creation, authentication, and message processing.
+    """
+
+    def __init__(self, tbot):
+        """
+        Initialize AccountHandler with bot instance.
+
+        Args:
+            tbot: Bot instance containing configuration and client management
+        """
+        self.tbot = tbot
+        self._conversations = {}
+        self.SessionManager = tbot.client_manager
+
+    async def add_account(self, event):
+        """
+        Initiates the account addition process by requesting phone number.
+
+        Args:
+            event: Telegram event containing chat information
+        """
+        logger.info("add_account in AccountHandler")
+        chat_id = event.chat_id
+        try:
+            await prompt_for_input(
+                self.tbot, event,
+                "Please enter your phone number:",
+                'phone_number_handler'
+            )
+        except Exception as e:
+            logger.error(f"Error in add_account: {e}")
+            await self.tbot.tbot.send_message(chat_id, "Error occurred while adding account. Please try again.")
+
+    async def phone_number_handler(self, event):
+        """
+        Handles phone number verification and initiates client connection.
+
+        Args:
+            event: Telegram event containing the phone number
+        """
+        logger.info("phone_number_handler in AccountHandler")
+        chat_id = event.chat_id
+        phone_number = event.message.text.strip()
+        
+        # Validate phone number
+        is_valid, error_msg = InputValidator.validate_phone_number(phone_number)
+        if not is_valid:
+            await self.tbot.tbot.send_message(chat_id, f"{error_msg}\nPlease try again.")
+            return
+        
+        # Sanitize phone number for use as session name
+        try:
+            sanitized_phone = sanitize_session_name(phone_number)
+        except ValueError as e:
+            logger.error(f"Invalid phone number format: {e}")
+            await self.tbot.tbot.send_message(chat_id, "Invalid phone number format. Please try again.")
+            return
+        
+        try:
+            # Create client with sanitized phone number as session name
+            logger.info(f"PHONE_NUMBER_HANDLER: Creating client for {phone_number}")
+            client = TelegramClient(sanitized_phone, API_ID, API_HASH)
+
+            logger.info("PHONE_NUMBER_HANDLER: Connecting to Telegram...")
+            await client.connect()
+
+            if not await client.is_user_authorized():
+                logger.info("PHONE_NUMBER_HANDLER: Not authorized, sending code request")
+                # Send "Please wait..." message first
+                wait_message = await self.tbot.tbot.send_message(chat_id, "Please wait...")
+                # Send code request to user's phone
+                await client.send_code_request(phone_number)
+                # Delete the wait message and send the verification code message
+                try:
+                    await wait_message.delete()
+                except Exception as e:
+                    logger.debug(f"Failed to delete prompt message: {e}")
+                await self.tbot.tbot.send_message(chat_id, "Verification code sent to your Telegram account.\n\nEnter the verification code:")
+                async with self.tbot._conversations_lock:
+                    self.tbot._conversations[chat_id] = 'code_handler'
+                self.tbot.handlers['temp_client'] = client
+                self.tbot.handlers['temp_phone'] = phone_number
+                logger.info("PHONE_NUMBER_HANDLER: Code request sent successfully")
+            else:
+                logger.info("PHONE_NUMBER_HANDLER: Already authorized, finalizing setup")
+                # Already authorized, finalize setup
+                await self.finalize_client_setup(client, phone_number, chat_id)
+        except Exception as e:
+            logger.error(f"PHONE_NUMBER_HANDLER: Error - {e}")
+            await send_error_message(self.tbot, chat_id, e, 'phone')
+            self.cleanup_temp_handlers()
+
+    async def code_handler(self, event):
+        """
+        Processes verification code and completes authentication.
+
+        Args:
+            event: Telegram event containing the verification code
+        """
+        try:
+            logger.info("code_handler in AccountHandler")
+            chat_id = event.chat_id
+            code = event.message.text.strip()
+            client = self.tbot.handlers.get('temp_client')
+            phone_number = self.tbot.handlers.get('temp_phone')
+
+            if not client or not phone_number:
+                await self.tbot.tbot.send_message(chat_id, "Session expired or invalid. Please start over with /start.")
+                self.cleanup_temp_handlers()
+                return
+
+            # Send processing message
+            processing_msg = await self.tbot.tbot.send_message(chat_id, "Verifying code...")
+            
+            try:
+                # Attempt sign in with code
+                await client.sign_in(phone=phone_number, code=code)
+                
+                # ✅ CRITICAL: Verify that login was successful
+                if await client.is_user_authorized():
+                    logger.info(f"Code verification successful for {phone_number}")
+                    await processing_msg.delete()
+                    await self.finalize_client_setup(client, phone_number, chat_id)
+                else:
+                    # Login failed but no exception
+                    logger.error(f"Code verification failed for {phone_number}: not authorized after sign_in")
+                    await processing_msg.delete()
+                    await self.tbot.tbot.send_message(chat_id, "Code verification failed. Please try again with /start.")
+                    self.cleanup_temp_handlers()
+                    
+            except Exception as sign_in_error:
+                # Delete processing message
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.debug(f"Failed to delete prompt message: {e}")
+                # Re-raise to be handled by outer exception handlers
+                raise sign_in_error
+                
+        except SessionPasswordNeededError:
+            await self.tbot.tbot.send_message(chat_id, "Two-factor authentication is enabled.\n\nPlease enter your password:")
+            async with self.tbot._conversations_lock:
+                self.tbot._conversations[chat_id] = 'password_handler'
+        except FloodWaitError as e:
+            await self.tbot.tbot.send_message(chat_id, f"Too many attempts. Please wait {e.seconds} seconds and try again.")
+            self.cleanup_temp_handlers()
+        except Exception as e:
+            logger.error(f"Error during code verification: {e}")
+            await send_error_message(self.tbot, chat_id, e, 'code')
+            self.cleanup_temp_handlers()
+
+    async def password_handler(self, event):
+        """
+        Handles 2FA password verification if required.
+
+        Args:
+            event: Telegram event containing the 2FA password
+        """
+        try:
+            logger.info("password_handler in AccountHandler")
+            chat_id = event.chat_id
+            password = event.message.text.strip()
+            client = self.tbot.handlers.get('temp_client')
+            phone_number = self.tbot.handlers.get('temp_phone')
+
+            if not client or not phone_number:
+                await self.tbot.tbot.send_message(chat_id, "Session expired or invalid. Please start over with /start.")
+                self.cleanup_temp_handlers()
+                return
+
+            # Send processing message
+            processing_msg = await self.tbot.tbot.send_message(chat_id, "Verifying password...")
+            
+            try:
+                # Attempt sign in with password
+                await client.sign_in(password=password)
+                
+                # ✅ CRITICAL: Verify that login was successful
+                if await client.is_user_authorized():
+                    logger.info(f"Password verification successful for {phone_number}")
+                    await processing_msg.delete()
+                    await self.finalize_client_setup(client, phone_number, chat_id)
+                else:
+                    # Login failed but no exception
+                    logger.error(f"Password verification failed for {phone_number}: not authorized after sign_in")
+                    await processing_msg.delete()
+                    await self.tbot.tbot.send_message(chat_id, "Password verification failed. Please try again with /start.")
+                    self.cleanup_temp_handlers()
+                    
+            except Exception as sign_in_error:
+                # Delete processing message
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.debug(f"Failed to delete prompt message: {e}")
+                # Re-raise to be handled by outer exception handlers
+                raise sign_in_error
+                
+        except FloodWaitError as e:
+            await self.tbot.tbot.send_message(chat_id, f"Too many attempts. Please wait {e.seconds} seconds and try again.")
+            self.cleanup_temp_handlers()
+        except Exception as e:
+            logger.error(f"Error during password verification: {e}")
+            await send_error_message(self.tbot, chat_id, e, 'password')
+            self.cleanup_temp_handlers()
+
+    async def finalize_client_setup(self, client, phone_number, chat_id):
+        """
+        Completes client setup and saves configuration.
+
+        Args:
+            client: Authorized TelegramClient instance
+            phone_number: User's phone number
+            chat_id: Chat ID for response messages
+        """
+        logger.info("finalize_client_setup in AccountHandler")
+        try:
+            # ✅ DOUBLE CHECK: Make absolutely sure the client is authorized before saving
+            if not await client.is_user_authorized():
+                logger.error(f"CRITICAL: Client {phone_number} is NOT authorized in finalize_client_setup!")
+                await self.tbot.tbot.send_message(chat_id, "Authentication failed. Account is not properly authorized.\n\nPlease try again with /start.")
+                self.cleanup_temp_handlers()
+                return
+            
+            # ✅ Verify we can get user info
+            try:
+                me = await client.get_me()
+                if not me:
+                    logger.error(f"CRITICAL: get_me() returned None for {phone_number}")
+                    await self.tbot.tbot.send_message(chat_id, "Authentication verification failed.\n\nPlease try again with /start.")
+                    self.cleanup_temp_handlers()
+                    return
+                logger.info(f"Verified user: {me.first_name} (@{me.username}) - ID: {me.id}")
+            except Exception as verify_error:
+                logger.error(f"CRITICAL: Cannot verify user {phone_number}: {verify_error}")
+                await self.tbot.tbot.send_message(chat_id, f"Authentication verification failed: {verify_error}\n\nPlease try again with /start.")
+                self.cleanup_temp_handlers()
+                return
+            
+            # ✅ NOW save the session (only after all checks passed)
+            # Use sanitized phone number as session name
+            try:
+                session_name = sanitize_session_name(phone_number)
+            except ValueError as e:
+                logger.error(f"Invalid phone number for session name: {e}")
+                await self.tbot.tbot.send_message(chat_id, "Invalid phone number format.")
+                self.cleanup_temp_handlers()
+                return
+            
+            client.session.save()
+            logger.info(f"Session saved for {phone_number}")
+
+            if not isinstance(self.tbot.config['clients'], dict):
+                logger.warning("'clients' is not a dictionary. Initializing it as an empty dictionary.")
+                self.tbot.config['clients'] = {}
+
+            self.tbot.config['clients'][session_name] = []
+            self.tbot.config_manager.save_config(self.tbot.config)
+            logger.info(f"Config saved for {phone_number}")
+
+            # Use lock when modifying active_clients
+            async with self.tbot.active_clients_lock:
+                self.tbot.active_clients[session_name] = client
+            logger.info(f"Added to active_clients: {phone_number}")
+            
+            # Set up message monitoring for this new client
+            if not hasattr(client, '_message_processing_set'):
+                await self.tbot.monitor.process_messages_for_client(client)
+                client._message_processing_set = True
+
+            await self.tbot.tbot.send_message(
+                chat_id, 
+                f"Account added successfully!\n\n"
+                f"Phone: {phone_number}\n"
+                f"Name: {me.first_name}\n"
+                f"Username: @{me.username if me.username else 'N/A'}\n\n"
+                f"Account is now active and ready to use!"
+            )
+            logger.info(f"Account {phone_number} fully set up and verified")
+            self.cleanup_temp_handlers()
+
+        except Exception as e:
+            logger.error(f"Error in finalize_client_setup: {e}", exc_info=True)
+            await self.tbot.tbot.send_message(chat_id, f"Error occurred while finalizing setup: {str(e)[:100]}")
+            self.cleanup_temp_handlers()
+
+    def cleanup_temp_handlers(self):
+        """
+        Removes temporary handlers and data after setup completion.
+        """
+        logger.info("cleanup_temp_handlers in AccountHandler")
+        try:
+            self.tbot.handlers.pop('temp_client', None)
+            self.tbot.handlers.pop('temp_phone', None)
+        except Exception as e:
+            logger.error(f"Error in cleanup_temp_handlers: {e}")
+
+    async def update_groups(self, event):
+        """
+        Updates group information for all clients.
+
+        Args:
+            event: Telegram event triggering the update
+        """
+        logger.info("Started update_groups process.")
+        groups_per_client = {}
+        await self.SessionManager.detect_sessions()
+
+        try:
+            status_message = await event.respond("Please wait, identifying groups for each client...")
+
+            json_data = {
+                "TARGET_GROUPS": [],
+                "KEYWORDS": [],
+                "IGNORE_USERS": [],
+                "clients": {}
+            }
+
+            if os.path.exists(CLIENTS_JSON_PATH):
+                try:
+                    with open(CLIENTS_JSON_PATH, "r", encoding='utf-8') as json_file:
+                        loaded_data = json.loads(json_file.read())
+                        json_data.update(loaded_data)
+                    logger.info("Loaded existing client data from clients.json.")
+                except json.JSONDecodeError as e:
+                    logger.error("Error decoding clients.json.", exc_info=True)
+
+            # Normalize the clients section to dict format regardless of where it
+            # came from (missing file, legacy list format, or new dict format).
+            if isinstance(json_data["clients"], list):
+                json_data["clients"] = {session: [] for session in json_data["clients"]}
+            elif not isinstance(json_data["clients"], dict):
+                json_data["clients"] = {}
+
+            # Get a snapshot of active clients to avoid holding the lock during long operations
+            async with self.tbot.active_clients_lock:
+                active_clients_snapshot = list(self.tbot.active_clients.items())
+            
+            for session_name, client in active_clients_snapshot:
+                try:
+                    logger.info(f"Processing client: {session_name}")
+                    group_ids = set()
+
+                    # Process dialogs in batches for better performance
+                    batch_count = 0
+                    dialog_limit = 5000  # Reasonable limit to prevent excessive processing
+                    
+                    async for dialog in client.iter_dialogs(limit=dialog_limit):
+                        try:
+                            if isinstance(dialog.entity, (Chat, Channel)) and not (
+                                isinstance(dialog.entity, Channel) and dialog.entity.broadcast
+                            ):
+                                group_ids.add(dialog.entity.id)
+                            
+                            batch_count += 1
+                            
+                            # Rate limiting and progress updates
+                            if batch_count % GROUPS_BATCH_SIZE == 0:
+                                await asyncio.sleep(1)  # Shorter sleep for better responsiveness
+                                
+                            if len(group_ids) % 20 == 0:
+                                await status_message.edit(f"Found {len(group_ids)} groups for {session_name}...")
+                                
+                        except Exception as e:
+                            logger.error(f"Error processing dialog for client {session_name}.", exc_info=True)
+                            continue
+
+                    groups_per_client[session_name] = list(group_ids)
+                    logger.info(f"Found {len(group_ids)} groups for client {session_name}.")
+                    await status_message.edit(f"Found {len(group_ids)} groups for {session_name}.")
+                    await asyncio.sleep(GROUPS_UPDATE_SLEEP)
+
+                except FloodWaitError as e:
+                    wait_time = e.seconds
+                    logger.warning(f"FloodWaitError: Sleeping for {wait_time} seconds for client {session_name}.")
+                    await status_message.edit(f"Rate limited. Waiting for {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    # Check if session is revoked
+                    from src.utils import is_session_revoked_error, remove_revoked_session_completely
+                    if is_session_revoked_error(e):
+                        logger.error(f"Session revoked while updating groups for {session_name}: {e}")
+                        await remove_revoked_session_completely(self.tbot, session_name)
+                        continue
+                    logger.error(f"Unexpected error while processing client {session_name}.", exc_info=True)
+                    continue
+
+            for session_name, group_ids in groups_per_client.items():
+                existing = json_data["clients"].get(session_name)
+                if isinstance(existing, dict):
+                    # New format: preserve metadata (e.g. is_reported) and merge groups
+                    existing_groups = existing.get('groups', [])
+                    existing['groups'] = list(set(existing_groups + group_ids))
+                    json_data["clients"][session_name] = existing
+                elif isinstance(existing, list):
+                    json_data["clients"][session_name] = list(set(existing + group_ids))
+                else:
+                    json_data["clients"][session_name] = group_ids
+
+            with open(CLIENTS_JSON_PATH, "w", encoding='utf-8') as json_file:
+                json.dump(json_data, json_file, indent=4, ensure_ascii=False)
+                logger.info(f"Saved updated client data for {len(groups_per_client)} clients to clients.json.")
+
+            await status_message.edit(f"That's it, groups identified and saved successfully for all clients!")
+
+        except Exception as e:
+            logger.error("Critical error in update_groups function.", exc_info=True)
+            await event.respond(f"Error identifying groups: {str(e)}")
+
+
+    async def check_all_accounts_report_status(self, event):
+        """
+        Check report status for all existing accounts.
+        """
+        if not REPORT_CHECK_BOT:
+            await event.respond("REPORT_CHECK_BOT not configured. Please set it in start_bot.py or .env file.")
+            return
+        
+        try:
+            await event.respond("Checking report status for all accounts... This may take a while.")
+            
+            clients_data = self.tbot.config.get('clients', {})
+            if not clients_data:
+                await event.respond("No accounts found to check.")
+                return
+            
+            reported_accounts = []
+            checked_count = 0
+            
+            # Only check accounts that are in active_clients (skip revoked sessions)
+            async with self.tbot.active_clients_lock:
+                active_sessions = set(self.tbot.active_clients.keys())
+                sessions_to_check = [s for s in clients_data.keys() if s in active_sessions]
+            
+            for session_name in sessions_to_check:
+                try:
+                    # Get phone number from session name
+                    phone_number = session_name.replace('.session', '').strip()
+                    if not phone_number.startswith('+'):
+                        phone_number = '+' + phone_number
+                    
+                    # Get account client
+                    async with self.tbot.active_clients_lock:
+                        account = self.tbot.active_clients.get(session_name)
+                    
+                    if account:
+                        checked_count += 1
+                        # Check report status
+                        from src.actions import Actions
+                        actions = Actions(self.tbot)
+                        is_reported = await actions.check_report_status(phone_number, account)
+                        
+                        if is_reported:
+                            reported_accounts.append(session_name)
+                            # Save report status to config
+                            if not isinstance(clients_data[session_name], dict):
+                                old_groups = clients_data[session_name]
+                                clients_data[session_name] = {
+                                    'groups': old_groups if isinstance(old_groups, list) else [],
+                                    'is_reported': True
+                                }
+                            else:
+                                clients_data[session_name]['is_reported'] = True
+                            
+                            # Save config
+                            self.tbot.config_manager.save_config(self.tbot.config)
+                            logger.info(f"Marked {session_name} as reported in config")
+                        
+                        # Small delay between checks
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    logger.error(f"Error checking report status for {session_name}: {e}")
+            
+            # Report results
+            if reported_accounts:
+                reported_phones = [acc.replace('.session', '') for acc in reported_accounts]
+                result_msg = f"Checked {checked_count} accounts.\n\nReported accounts: {', '.join(reported_phones)}"
+            else:
+                result_msg = f"Checked {checked_count} accounts.\n\nNo reported accounts found."
+            
+            await event.respond(result_msg)
+            
+        except Exception as e:
+            logger.error(f"Error in check_all_accounts_report_status: {e}", exc_info=True)
+            await event.respond(f"Error checking accounts: {str(e)}")
+
+    async def show_accounts(self, event):
+        """
+        Display all registered accounts with their current status and controls.
+
+        Args:
+            event: Telegram event triggering the account display
+        """
+        logger.info("Executing show_accounts method in AccountHandler")
+
+        try:
+            clients_data = self.tbot.config.get('clients', {})
+            inactive_data = self.tbot.config.get('inactive_accounts', {})
+
+            # Get active clients snapshot
+            async with self.tbot.active_clients_lock:
+                active_sessions = set(self.tbot.active_clients.keys())
+
+            messages = []
+
+            # Process active/inactive clients from clients_data
+            if isinstance(clients_data, dict) and clients_data:
+                for session, account_data in clients_data.items():
+                    try:
+                        # Skip revoked sessions - if session is in config but not in active_clients,
+                        # and not in inactive_accounts, it's likely revoked - skip it
+                        if session not in active_sessions:
+                            # Check if it's in inactive_accounts
+                            if 'inactive_accounts' not in self.tbot.config or session not in self.tbot.config['inactive_accounts']:
+                                # Session is in config but not active and not in inactive_accounts - likely revoked, skip it
+                                logger.debug(f"Skipping potentially revoked session {session} (not in active_clients and not in inactive_accounts)")
+                                continue
+                            else:
+                                # Check if reason indicates revoked session
+                                inactive_reason = self.tbot.config['inactive_accounts'][session].get('reason', '').lower()
+                                if 'revoked' in inactive_reason or 'auth' in inactive_reason or 'session' in inactive_reason:
+                                    logger.debug(f"Skipping revoked session {session}")
+                                    continue
+                        
+                        phone = session.replace('.session', '') if session else 'Unknown'
+                        
+                        # Handle both old format (list of groups) and new format (dict)
+                        if isinstance(account_data, dict):
+                            groups = account_data.get('groups', [])
+                            is_reported = account_data.get('is_reported', False)
+                        else:
+                            groups = account_data if isinstance(account_data, list) else []
+                            is_reported = False
+                        
+                        groups_count = len(groups) if isinstance(groups, list) else 0
+                        is_active = session in active_sessions
+                        status = "Active" if is_active else "Inactive"
+                        
+                        # Add report status
+                        report_status = "Reported" if is_reported else "Clean"
+
+                        logger.debug(f"Processing account: {session}, Status: {status}, Groups: {groups_count}, Reported: {is_reported}")
+
+                        text = (
+                            f"Phone: {phone}\n"
+                            f"Groups: {groups_count}\n"
+                            f"Status: {status}\n"
+                            f"Report: {report_status}\n"
+                        )
+
+                        buttons = Keyboard.toggle_and_delete_keyboard(status, session)
+                        messages.append((text, buttons))
+                    except Exception as e:
+                        logger.error(f"Error processing account {session}: {e}", exc_info=True)
+
+            # Process truly inactive accounts (those in inactive_accounts but not in clients)
+            if isinstance(inactive_data, dict) and inactive_data:
+                for session, account_info in inactive_data.items():
+                    try:
+                        # Skip if already processed above
+                        if session in clients_data:
+                            continue
+
+                        phone = account_info.get('phone', session)
+                        reason = account_info.get('reason', 'unknown')
+                        last_seen = account_info.get('last_seen', 0)
+
+                        # Format timestamp
+                        import time
+                        try:
+                            last_seen_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(last_seen))
+                        except (ValueError, OSError, Exception):
+                            last_seen_str = 'Unknown'
+
+                        status = "Inactive (Auth Error)"
+
+                        logger.debug(f"Processing inactive account: {session}, Reason: {reason}")
+
+                        text = (
+                            f"Phone: {phone}\n"
+                            f"Groups: N/A\n"
+                            f"Status: {status}\n"
+                            f"Reason: {reason}\n"
+                            f"Last seen: {last_seen_str}\n"
+                        )
+
+                        buttons = Keyboard.toggle_and_delete_keyboard(status, session)
+                        messages.append((text, buttons))
+                    except Exception as e:
+                        logger.error(f"Error processing inactive account {session}: {e}", exc_info=True)
+
+            if not messages:
+                await event.respond("No accounts found.")
+                logger.warning("No accounts found in the configuration.")
+                return
+
+            for message_text, message_buttons in messages:
+                try:
+                    await event.respond(message_text, buttons=message_buttons)
+                    # Safely extract session name from message text for logging
+                    try:
+                        parts = message_text.split(' ')
+                        if len(parts) > 1:
+                            logger.info(f"Sent account details for session: {parts[1]}.")
+                        else:
+                            logger.info(f"Sent account details message.")
+                    except (IndexError, AttributeError):
+                        logger.info(f"Sent account details message.")
+                except Exception as e:
+                    logger.error(f"Error sending message for account: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Critical error in show_accounts: {e}", exc_info=True)
+            await event.respond("Error showing accounts. Please try again.")
+
+    TRANSIENT_ERRORS = (
+        (('database is locked', 'sqlite'), 'database issue', 'Database lock'),
+        (('flood', 'too many'), 'Telegram limit', 'Flood control'),
+        (('network', 'connection'), 'network issue', 'Network issue'),
+    )
+
+    def _mark_inactive(self, session: str, reason: str, details: str):
+        self.tbot.config.setdefault('inactive_accounts', {})[session] = {
+            'phone': session,
+            'last_seen': time.time(),
+            'reason': reason,
+            'error_details': details,
+        }
+        self.tbot.config_manager.save_config(self.tbot.config)
+
+    async def _disable_client(self, session: str, event):
+        async with self.tbot.active_clients_lock:
+            client = self.tbot.active_clients[session]
+            if hasattr(self.tbot, 'monitor'):
+                self.tbot.monitor.cleanup_client_handlers(client)
+            await client.disconnect()
+            del self.tbot.active_clients[session]
+        logger.info(f"Client {session} disabled successfully.")
+        await event.respond(f"Account {session} disabled.")
+
+    async def _activate_authorized_client(self, session: str, client, event):
+        async with self.tbot.active_clients_lock:
+            self.tbot.active_clients[session] = client
+
+        if hasattr(self.tbot, 'monitor') and not hasattr(client, '_message_processing_set'):
+            await self.tbot.monitor.process_messages_for_client(client)
+            client._message_processing_set = True
+
+        logger.info(f"Client {session} enabled successfully.")
+        await event.respond(f"Account {session} activated.")
+
+        inactive = self.tbot.config.get('inactive_accounts', {})
+        if session in inactive:
+            del inactive[session]
+            self.tbot.config_manager.save_config(self.tbot.config)
+
+    async def _handle_enable_error(self, session: str, error: Exception, event):
+        error_msg = str(error).lower()
+        logger.error(f"Error enabling client {session}: {error}")
+
+        for needles, user_reason, log_reason in self.TRANSIENT_ERRORS:
+            if any(needle in error_msg for needle in needles):
+                await event.respond(
+                    f"Account {session} is temporarily inactive ({user_reason}). Please try again later.")
+                logger.warning(f"{log_reason} for {session}, will retry later")
+                return
+
+        self._mark_inactive(session, 'connection_error', str(error))
+        await event.respond(f"Error activating account {session}: {str(error)[:100]}...")
+
+    async def _enable_client(self, session: str, event):
+        try:
+            session_file = get_safe_session_file_path(session)
+        except ValueError as e:
+            logger.error(f"Invalid session name: {e}")
+            await event.respond("Invalid session name format.")
+            return
+
+        if not os.path.exists(session_file):
+            await event.respond(f"Session file for account {session} not found.")
+            logger.error(f"Session file {session_file} not found")
+            return
+
+        client = TelegramClient(session, API_ID, API_HASH)
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                await self._activate_authorized_client(session, client, event)
+                return
+
+            await client.disconnect()
+            self._mark_inactive(session, 'not_authorized_on_reactivation', 'Client not authorized')
+            await event.respond(f"Account {session} has been unauthorized by Telegram.")
+            logger.warning(f"Client {session} not authorized on reactivation")
+        except Exception as e:
+            await client.disconnect()
+            await self._handle_enable_error(session, e, event)
+
+    async def toggle_client(self, session: str, event):
+        """
+        Toggle the active/inactive status of a client account.
+
+        Args:
+            session (str): Session identifier for the account
+            event: Telegram event triggering the toggle
+        """
+        logger.info(f"toggle_client called for session: {session}")
+        try:
+            if session not in self.tbot.config['clients']:
+                logger.warning(f"Session {session} not found in clients.")
+                await event.respond("Account not found.")
+                return
+
+            async with self.tbot.active_clients_lock:
+                currently_active = session in self.tbot.active_clients
+
+            logger.info(f"Current status for {session}: {'Active' if currently_active else 'Inactive'}")
+
+            if currently_active:
+                await self._disable_client(session, event)
+            else:
+                try:
+                    await self._enable_client(session, event)
+                except Exception as e:
+                    logger.error(f"Error in toggle_client enable section: {e}")
+                    await event.respond(f"Error activating account {session}.")
+
+            logger.info("Saving updated configuration.")
+            self.tbot.config_manager.save_config(self.tbot.config)
+
+        except Exception as e:
+            logger.error(f"Error toggling client {session}: {e}", exc_info=True)
+            try:
+                await event.respond("Error changing account status.")
+            except Exception as resp_e:
+                logger.error(f"Failed to send error response: {resp_e}")
+
+    async def delete_client(self, session: str, event):
+        """
+        Permanently delete a client account and its associated data.
+
+        Args:
+            session (str): Session identifier for the account to delete
+            event: Telegram event triggering the deletion
+        """
+        logger.info(f"delete_client called for session: {session}")
+        try:
+            # Check if client is active with lock
+            async with self.tbot.active_clients_lock:
+                is_active = session in self.tbot.active_clients
+            
+            if is_active:
+                logger.info(f"Disconnecting active client: {session}")
+                # Use lock when modifying active_clients
+                async with self.tbot.active_clients_lock:
+                    client = self.tbot.active_clients[session]
+                    # Cleanup handlers before disconnecting
+                    if hasattr(self.tbot, 'monitor'):
+                        self.tbot.monitor.cleanup_client_handlers(client)
+                    await client.disconnect()
+                    del self.tbot.active_clients[session]
+                logger.info(f"Client {session} disconnected and removed from active clients.")
+
+            if session in self.tbot.config['clients']:
+                logger.info(f"Removing session {session} from configuration.")
+                del self.tbot.config['clients'][session]
+                self.tbot.config_manager.save_config(self.tbot.config)
+
+                try:
+                    session_file = get_safe_session_file_path(session)
+                    if os.path.exists(session_file):
+                        try:
+                            logger.info(f"Deleting session file: {session_file}")
+                            os.remove(session_file)
+                        except OSError as e:
+                            # File is in use by another process - this is normal
+                            logger.warning(f"Session file {session_file} could not be deleted (in use by another process): {e}")
+                            logger.info(f"Session {session} removed from config but file remains (will be cleaned up later)")
+                except ValueError as e:
+                    logger.error(f"Invalid session name for deletion: {e}")
+
+                await event.respond("Account deleted successfully.")
+            else:
+                logger.warning(f"Session {session} not found in configuration.")
+                await event.respond("Account not found.")
+
+        except Exception as e:
+            logger.error(f"Error deleting client {session}: {e}", exc_info=True)
+            await event.respond("Error deleting account.")
+

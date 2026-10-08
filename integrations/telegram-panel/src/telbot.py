@@ -1,0 +1,297 @@
+import logging
+from telethon import TelegramClient, events, Button
+from telethon.errors import FloodWaitError
+import asyncio
+from src.config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID
+from src.config import ConfigManager, validate_env_file
+from src.logger import setup_logging
+from src.handlers import MessageHandler, CallbackHandler, CommandHandler, AccountHandler
+from src.client import SessionManager
+from src.monitor import Monitor
+
+setup_logging()
+logger = logging.getLogger(__name__)
+
+class TelegramBot:
+    def __init__(self):
+        """
+        Initialize the TelegramBot class with necessary components.
+        """
+        try:
+            self.config_manager = ConfigManager('clients.json')
+            self.config = self.config_manager.load_config()
+            self.tbot = None
+            self.active_clients = {}
+            self.active_clients_lock = None
+            self.handlers = {}
+            self._conversations = {}
+            self._conversations_lock = None
+            self.client_manager = None
+            self.account_handler = None
+            self.monitor = None
+            self._handlers_registered = False
+
+            logger.info("Bot initialized successfully")
+        except Exception as e:
+            logger.critical(f"Error during bot initialization: {e}")
+            raise
+
+    async def start(self):
+        """
+        Start the bot and initialize all components.
+        """
+        try:
+            # Validate environment configuration before starting
+            try:
+                validate_env_file()
+            except ValueError as e:
+                logger.critical(f"Environment configuration error: {e}")
+                raise SystemExit(str(e))
+            
+            # Create TelegramClient now that we're in an async context
+            if self.tbot is None or not self.tbot.is_connected():
+                if self.tbot is None:
+                    self.tbot = TelegramClient('bot2', API_ID, API_HASH)
+                    logger.info("TelegramClient created")
+                elif not self.tbot.is_connected():
+                    logger.info("Reconnecting TelegramClient...")
+            
+            # Initialize async components now that we're in an async context
+            if self.active_clients_lock is None:
+                self.active_clients_lock = asyncio.Lock()
+            if self._conversations_lock is None:
+                self._conversations_lock = asyncio.Lock()
+            
+            # Initialize managers now that we have locks and client
+            if self.client_manager is None:
+                # SessionManager needs the bot wrapper (for active_clients_lock,
+                # monitor, config_manager and the .tbot client), not the raw client.
+                self.client_manager = SessionManager(self.config, self.active_clients, self)
+            if self.account_handler is None:
+                self.account_handler = AccountHandler(self)
+            if self.monitor is None:
+                self.monitor = Monitor(self)
+            
+            logger.info("Starting bot connection...")
+            try:
+                await self.tbot.start(bot_token=BOT_TOKEN)
+                logger.info("Bot connected to Telegram")
+            except FloodWaitError as e:
+                wait_time = e.seconds
+                logger.warning(f"FloodWaitError: Telegram requires waiting {wait_time} seconds ({wait_time/60:.1f} minutes) before bot can start.")
+                logger.info(f"Waiting {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+                logger.info("Retrying bot connection...")
+                await self.tbot.start(bot_token=BOT_TOKEN)
+                logger.info("Bot connected to Telegram after waiting")
+            
+            await self.init_handlers()
+            logger.info("Handlers initialized")
+            
+            await self.client_manager.start_saved_clients()
+            logger.info("Saved clients started")
+            
+            try:
+                sent = await self.notify_admin("Bot started successfully and all clients have been detected. Use /start to begin.")
+                if sent:
+                    logger.info("Admin notification sent")
+                else:
+                    logger.info("Admin notification not delivered (admin may need to /start the bot first)")
+            except Exception as e:
+                logger.warning(f"Failed to send admin notification: {e}")
+            
+            logger.info("Bot started successfully")
+        except Exception as e:
+            logger.error(f"Error during bot start: {e}", exc_info=True)
+            raise
+
+    async def init_handlers(self):
+        """
+        Initialize all event handlers for the bot.
+        """
+        # The bot client is reused across reconnections, so registering again
+        # would stack duplicate handlers and process every event multiple times.
+        if self._handlers_registered:
+            logger.info("Handlers already registered, skipping re-registration")
+            return
+        try:
+            # Register command handler first (with pattern) - this will catch /start before generic handler
+            command_handler = CommandHandler(self)
+            self.tbot.add_event_handler(
+                self.admin_only(command_handler.start_command), 
+                events.NewMessage(pattern='^/start$')
+            )
+            logger.info("Registered /start command handler")
+            
+            # Register callback handler for button clicks
+            callback_handler = CallbackHandler(self)
+            self.tbot.add_event_handler(
+                callback_handler.callback_handler,
+                events.CallbackQuery()
+            )
+            logger.info("Registered callback query handler")
+
+            # Register generic message handler last (for conversation states)
+            # This should NOT catch /start because it's already handled above
+            message_handler = MessageHandler(self)
+            self.tbot.add_event_handler(
+                message_handler.message_handler,
+                events.NewMessage()
+            )
+            logger.info("Registered generic message handler")
+
+            self._handlers_registered = True
+            logger.info("Handlers initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing handlers: {e}")
+            raise
+
+    def admin_only(self, handler):
+        """
+        Decorator to restrict access to admin-only handlers.
+
+        :param handler: The handler function to wrap.
+        """
+        async def wrapper(event):
+            try:
+                sender_id = event.sender_id
+                logger.debug(f"admin_only check: sender_id={sender_id}, ADMIN_ID={ADMIN_ID}")
+                
+                # Validate ADMIN_ID before comparison
+                try:
+                    from src.utils import validate_admin_id
+                    validated_admin_id = validate_admin_id(ADMIN_ID)
+                except ValueError as e:
+                    logger.error(f"Invalid ADMIN_ID configuration: {e}")
+                    await event.respond("Bot configuration error. Please contact administrator.")
+                    return
+                
+                if sender_id == validated_admin_id:
+                    await handler(event)
+                else:
+                    logger.warning(f"Unauthorized access attempt from user {sender_id}")
+                    await event.respond("You are not the admin")
+            except Exception as e:
+                logger.error(f"Error in admin_only wrapper: {e}", exc_info=True)
+                try:
+                    await event.respond("An error occurred. Please try again.")
+                except Exception as e:
+                    logger.debug(f"Failed to notify user of error: {e}")
+        return wrapper
+
+    async def run(self):
+        """
+        Run the bot and monitor clients with automatic reconnection.
+        """
+        max_retries = 5
+        retry_delay = 30  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(f"Attempting to restart bot (attempt {attempt + 1}/{max_retries})...")
+                    # Reset message processing flags for reconnection and remove
+                    # the previously registered handlers so they don't stack up
+                    # (which would forward each message multiple times).
+                    async with self.active_clients_lock:
+                        for client in self.active_clients.values():
+                            if self.monitor:
+                                self.monitor.cleanup_client_handlers(client)
+                            if hasattr(client, '_message_processing_set'):
+                                delattr(client, '_message_processing_set')
+                    await asyncio.sleep(retry_delay)
+                
+                await self.start()
+                logger.info("Bot is running...")
+                logger.info("=" * 60)
+                logger.info("✅ Bot started successfully and is ready to receive commands!")
+                logger.info("=" * 60)
+
+                # Start monitoring messages for all active clients (only once per client)
+                async with self.active_clients_lock:
+                    for client in self.active_clients.values():
+                        if not hasattr(client, '_message_processing_set'):
+                            # Start monitoring tasks in background (don't await them)
+                            asyncio.create_task(self.monitor.process_messages_for_client(client))
+                            client._message_processing_set = True
+                
+                # Keep the bot running until disconnected
+                logger.info("Bot is now running and waiting for messages...")
+                logger.info("Send /start to your bot in Telegram to begin.")
+                await self.tbot.run_until_disconnected()
+                
+                # If we reach here, the bot disconnected
+                logger.warning("Bot disconnected. Will attempt to reconnect...")
+                
+            except asyncio.CancelledError:
+                logger.warning("Bot run was cancelled")
+                break
+            except KeyboardInterrupt:
+                logger.info("Bot stopped by user")
+                break
+            except Exception as e:
+                logger.error(f"Error running bot (attempt {attempt + 1}/{max_retries}): {e}", exc_info=True)
+                try:
+                    await self.notify_admin(f"❌ Bot encountered an error: {str(e)[:200]}")
+                except Exception:
+                    logger.error("Failed to notify admin about error")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"Waiting {retry_delay} seconds before retry...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.critical(f"Max retries ({max_retries}) reached. Shutting down bot.")
+                    break
+            finally:
+                if attempt < max_retries - 1:
+                    # Don't fully shutdown on retry, just disconnect
+                    try:
+                        logger.info("Disconnecting for retry...")
+                        if self.tbot and self.tbot.is_connected():
+                            await self.tbot.disconnect()
+                    except Exception as e:
+                        logger.error(f"Error disconnecting: {e}")
+                else:
+                    # Final shutdown
+                    await self.shutdown()
+
+    async def notify_admin(self, message) -> bool:
+        """
+        Send a notification message to the admin.
+
+        :param message: The message text to send.
+        :return: True if the message was sent, False otherwise.
+        """
+        from src.utils import validate_admin_id
+        # Validate the configured ADMIN_ID first; a failure here really is a
+        # configuration problem.
+        try:
+            admin_id = validate_admin_id(ADMIN_ID)
+        except ValueError as e:
+            logger.error(f"Invalid ADMIN_ID configuration: {e}")
+            return False
+        # A send failure is usually NOT a bad ADMIN_ID — most often the admin has
+        # never started a chat with the bot, so Telegram won't let it message them.
+        try:
+            await self.tbot.send_message(admin_id, message)
+            logger.info("Notification sent to admin.")
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Could not send admin notification (has the admin sent /start to the bot?): {e}"
+            )
+            return False
+
+    async def shutdown(self):
+        """
+        Clean up resources and shut down the bot gracefully.
+        """
+        try:
+            logger.info("Shutting down bot...")
+            if self.client_manager:
+                await self.client_manager.disconnect_all_clients()
+            if self.tbot and self.tbot.is_connected():
+                await self.tbot.disconnect()
+            logger.info("Bot shut down successfully")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")

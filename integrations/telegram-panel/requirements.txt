@@ -1,0 +1,14 @@
+telethon==1.43.2  # >=1.43 required for colored inline buttons (Bot API 9.4 style field)
+python-dotenv==1.0.0
+aiohttp
+requests
+pysocks
+click>=8.0.0
+prompt-toolkit>=3.0.0
+rich>=13.0.0
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
