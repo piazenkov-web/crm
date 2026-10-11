@@ -1,0 +1,2350 @@
+{
+  "name": "get_corporate_report",
+  "description": "Агрегированный отчёт только уполномоченному представителю",
+  "group": "CORPORATE",
+  "mode": "READ",
+  "scope": "corporate:read",
+  "confirmation_required": false,
+  "mvp": false,
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "urn:ia:v4:tool:get_corporate_report:input",
+    "$defs": {
+      "Money": {
+        "type": "object",
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Деньги в минимальных единицах валюты; RUB — копейки."
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "RUB",
+              "USD",
+              "EUR",
+              "CNY"
+            ]
+          }
+        },
+        "required": [
+          "amount_minor",
+          "currency"
+        ],
+        "additionalProperties": false
+      },
+      "Page": {
+        "type": "object",
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "next_cursor",
+          "has_more"
+        ],
+        "additionalProperties": false
+      },
+      "Preference": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "district",
+              "metro",
+              "budget_minor",
+              "rooms",
+              "beds",
+              "kitchen",
+              "washing_machine",
+              "parking",
+              "elevator",
+              "workspace",
+              "wifi",
+              "floor",
+              "accessibility",
+              "travel_purpose",
+              "other"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "integer",
+              "boolean",
+              "null"
+            ],
+            "maxLength": 1000
+          },
+          "source_message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "allowed_to_store": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "source_message_id",
+          "allowed_to_store"
+        ],
+        "additionalProperties": false
+      },
+      "Guest": {
+        "type": "object",
+        "properties": {
+          "guest_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "preferred_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "preferred_channel": {
+            "type": "string",
+            "enum": [
+              "WEB",
+              "TELEGRAM",
+              "PHONE",
+              "EMAIL",
+              "MOBILE"
+            ]
+          },
+          "preferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Preference"
+            },
+            "maxItems": 100
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "guest_id",
+          "preferred_name",
+          "language",
+          "preferred_channel",
+          "preferences",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Consent": {
+        "type": "object",
+        "properties": {
+          "consent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "SERVICE",
+              "MARKETING",
+              "MEMORY",
+              "CALL_RECORDING"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "WEB",
+              "TELEGRAM",
+              "PHONE",
+              "EMAIL",
+              "MOBILE"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "GRANTED",
+              "REVOKED",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "consent_id",
+          "purpose",
+          "channel",
+          "status",
+          "evidence_ref",
+          "recorded_at"
+        ],
+        "additionalProperties": false
+      },
+      "Apartment": {
+        "type": "object",
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "district": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metro": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "rooms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "beds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "places": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "type",
+                "places"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          },
+          "amenities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 100
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "maxItems": 100
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "apartment_id",
+          "title",
+          "district",
+          "metro",
+          "public_address",
+          "rooms",
+          "capacity",
+          "beds",
+          "amenities",
+          "photos",
+          "source",
+          "observed_at"
+        ],
+        "additionalProperties": false
+      },
+      "Availability": {
+        "type": "object",
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNKNOWN"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "inventory_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "apartment_id",
+          "check_in",
+          "check_out",
+          "status",
+          "source",
+          "observed_at",
+          "expires_at",
+          "inventory_version"
+        ],
+        "additionalProperties": false
+      },
+      "Quote": {
+        "type": "object",
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "adults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "children": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nightly_lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "amount": {
+                  "$ref": "#/$defs/Money"
+                }
+              },
+              "required": [
+                "date",
+                "amount"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          },
+          "cleaning": {
+            "$ref": "#/$defs/Money"
+          },
+          "service_fee": {
+            "$ref": "#/$defs/Money"
+          },
+          "tax": {
+            "$ref": "#/$defs/Money"
+          },
+          "discount": {
+            "$ref": "#/$defs/Money"
+          },
+          "stay_total": {
+            "$ref": "#/$defs/Money"
+          },
+          "refundable_deposit": {
+            "$ref": "#/$defs/Money"
+          },
+          "due_now": {
+            "$ref": "#/$defs/Money"
+          },
+          "due_later": {
+            "$ref": "#/$defs/Money"
+          },
+          "terms_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "cancellation_policy_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "inventory_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "quote_id",
+          "apartment_id",
+          "check_in",
+          "check_out",
+          "adults",
+          "children",
+          "nightly_lines",
+          "cleaning",
+          "service_fee",
+          "tax",
+          "discount",
+          "stay_total",
+          "refundable_deposit",
+          "due_now",
+          "due_later",
+          "terms_version",
+          "cancellation_policy_version",
+          "expires_at",
+          "inventory_version",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "Booking": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guest_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "REQUESTED",
+              "PENDING_PROVIDER",
+              "CONFIRMED",
+              "CANCEL_PENDING",
+              "CANCELLED",
+              "EXPIRED",
+              "REJECTED",
+              "DELETED"
+            ]
+          },
+          "payment_status": {
+            "type": "string",
+            "enum": [
+              "UNPAID",
+              "PENDING",
+              "PARTIALLY_PAID",
+              "PAID",
+              "REFUND_PENDING",
+              "PARTIALLY_REFUNDED",
+              "REFUNDED",
+              "DISPUTED"
+            ]
+          },
+          "stay_status": {
+            "type": "string",
+            "enum": [
+              "NOT_ARRIVED",
+              "CHECKED_IN",
+              "CHECKED_OUT",
+              "NO_SHOW"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "booking_id",
+          "guest_id",
+          "apartment_id",
+          "check_in",
+          "check_out",
+          "status",
+          "payment_status",
+          "stay_status",
+          "version",
+          "external_id",
+          "quote_id"
+        ],
+        "additionalProperties": false
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "ASSIGNED",
+              "IN_PROGRESS",
+              "WAITING_GUEST",
+              "WAITING_VENDOR",
+              "RESOLVED",
+              "CLOSED"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "S1",
+              "S2",
+              "S3",
+              "S4"
+            ]
+          },
+          "assigned_team": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "severity",
+          "assigned_team",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "Place": {
+        "type": "object",
+        "properties": {
+          "place_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "opening_hours": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "booking_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        },
+        "required": [
+          "place_id",
+          "name",
+          "address",
+          "source_url",
+          "observed_at",
+          "opening_hours",
+          "booking_url"
+        ],
+        "additionalProperties": false
+      },
+      "Route": {
+        "type": "object",
+        "properties": {
+          "route_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "to": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "WALK",
+                    "TRANSIT",
+                    "TAXI",
+                    "CAR"
+                  ]
+                },
+                "duration_minutes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "mode",
+                "duration_minutes",
+                "source"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          },
+          "map_url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "route_id",
+          "legs",
+          "map_url",
+          "observed_at"
+        ],
+        "additionalProperties": false
+      },
+      "Document": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "document_id",
+          "title",
+          "version",
+          "valid_from",
+          "valid_until",
+          "status",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SUCCEEDED",
+              "FAILED",
+              "UNKNOWN"
+            ]
+          },
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status",
+          "resource_id",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Confirmation": {
+        "type": "object",
+        "properties": {
+          "confirmation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "payload_hash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "CONFIRMED",
+              "EXPIRED",
+              "CONSUMED"
+            ]
+          }
+        },
+        "required": [
+          "confirmation_id",
+          "action",
+          "payload_hash",
+          "expires_at",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delivery_status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "SENT",
+              "DELIVERED",
+              "FAILED",
+              "UNKNOWN"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "provider_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message_id",
+          "delivery_status",
+          "channel",
+          "provider_message_id"
+        ],
+        "additionalProperties": false
+      },
+      "Benefit": {
+        "type": "object",
+        "properties": {
+          "benefit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "terms_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "value": {
+            "$ref": "#/$defs/Money"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "benefit_id",
+          "name",
+          "terms_version",
+          "value",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "Followup": {
+        "type": "object",
+        "properties": {
+          "followup_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guest_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trigger_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "CLAIMED",
+              "SENT",
+              "CANCELLED",
+              "SUPPRESSED",
+              "FAILED"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "SERVICE",
+              "MARKETING"
+            ]
+          }
+        },
+        "required": [
+          "followup_id",
+          "guest_id",
+          "trigger_at",
+          "channel",
+          "status",
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "Metric": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date"
+          },
+          "definition_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "unit",
+          "period_start",
+          "period_end",
+          "definition_version"
+        ],
+        "additionalProperties": false
+      },
+      "SearchCriteria": {
+        "type": "object",
+        "properties": {
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "adults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "children": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget_per_night": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rooms_min": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "beds_required": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "check_in",
+          "check_out",
+          "adults",
+          "children",
+          "requirements"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "type": "object",
+    "properties": {
+      "company_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "period_start": {
+        "type": "string",
+        "format": "date"
+      },
+      "period_end": {
+        "type": "string",
+        "format": "date"
+      }
+    },
+    "required": [
+      "company_id",
+      "period_start",
+      "period_end"
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "urn:ia:v4:tool:get_corporate_report:output",
+    "$defs": {
+      "Money": {
+        "type": "object",
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Деньги в минимальных единицах валюты; RUB — копейки."
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "RUB",
+              "USD",
+              "EUR",
+              "CNY"
+            ]
+          }
+        },
+        "required": [
+          "amount_minor",
+          "currency"
+        ],
+        "additionalProperties": false
+      },
+      "Page": {
+        "type": "object",
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "next_cursor",
+          "has_more"
+        ],
+        "additionalProperties": false
+      },
+      "Preference": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "district",
+              "metro",
+              "budget_minor",
+              "rooms",
+              "beds",
+              "kitchen",
+              "washing_machine",
+              "parking",
+              "elevator",
+              "workspace",
+              "wifi",
+              "floor",
+              "accessibility",
+              "travel_purpose",
+              "other"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "integer",
+              "boolean",
+              "null"
+            ],
+            "maxLength": 1000
+          },
+          "source_message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "allowed_to_store": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "source_message_id",
+          "allowed_to_store"
+        ],
+        "additionalProperties": false
+      },
+      "Guest": {
+        "type": "object",
+        "properties": {
+          "guest_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "preferred_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "preferred_channel": {
+            "type": "string",
+            "enum": [
+              "WEB",
+              "TELEGRAM",
+              "PHONE",
+              "EMAIL",
+              "MOBILE"
+            ]
+          },
+          "preferences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Preference"
+            },
+            "maxItems": 100
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "guest_id",
+          "preferred_name",
+          "language",
+          "preferred_channel",
+          "preferences",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Consent": {
+        "type": "object",
+        "properties": {
+          "consent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "SERVICE",
+              "MARKETING",
+              "MEMORY",
+              "CALL_RECORDING"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "WEB",
+              "TELEGRAM",
+              "PHONE",
+              "EMAIL",
+              "MOBILE"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "GRANTED",
+              "REVOKED",
+              "UNKNOWN"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "consent_id",
+          "purpose",
+          "channel",
+          "status",
+          "evidence_ref",
+          "recorded_at"
+        ],
+        "additionalProperties": false
+      },
+      "Apartment": {
+        "type": "object",
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "district": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metro": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "rooms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "beds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "places": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "type",
+                "places"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          },
+          "amenities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 100
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "maxItems": 100
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "apartment_id",
+          "title",
+          "district",
+          "metro",
+          "public_address",
+          "rooms",
+          "capacity",
+          "beds",
+          "amenities",
+          "photos",
+          "source",
+          "observed_at"
+        ],
+        "additionalProperties": false
+      },
+      "Availability": {
+        "type": "object",
+        "properties": {
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNKNOWN"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "inventory_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "apartment_id",
+          "check_in",
+          "check_out",
+          "status",
+          "source",
+          "observed_at",
+          "expires_at",
+          "inventory_version"
+        ],
+        "additionalProperties": false
+      },
+      "Quote": {
+        "type": "object",
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "adults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "children": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nightly_lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "amount": {
+                  "$ref": "#/$defs/Money"
+                }
+              },
+              "required": [
+                "date",
+                "amount"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          },
+          "cleaning": {
+            "$ref": "#/$defs/Money"
+          },
+          "service_fee": {
+            "$ref": "#/$defs/Money"
+          },
+          "tax": {
+            "$ref": "#/$defs/Money"
+          },
+          "discount": {
+            "$ref": "#/$defs/Money"
+          },
+          "stay_total": {
+            "$ref": "#/$defs/Money"
+          },
+          "refundable_deposit": {
+            "$ref": "#/$defs/Money"
+          },
+          "due_now": {
+            "$ref": "#/$defs/Money"
+          },
+          "due_later": {
+            "$ref": "#/$defs/Money"
+          },
+          "terms_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "cancellation_policy_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "inventory_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "quote_id",
+          "apartment_id",
+          "check_in",
+          "check_out",
+          "adults",
+          "children",
+          "nightly_lines",
+          "cleaning",
+          "service_fee",
+          "tax",
+          "discount",
+          "stay_total",
+          "refundable_deposit",
+          "due_now",
+          "due_later",
+          "terms_version",
+          "cancellation_policy_version",
+          "expires_at",
+          "inventory_version",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "Booking": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guest_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "apartment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "REQUESTED",
+              "PENDING_PROVIDER",
+              "CONFIRMED",
+              "CANCEL_PENDING",
+              "CANCELLED",
+              "EXPIRED",
+              "REJECTED",
+              "DELETED"
+            ]
+          },
+          "payment_status": {
+            "type": "string",
+            "enum": [
+              "UNPAID",
+              "PENDING",
+              "PARTIALLY_PAID",
+              "PAID",
+              "REFUND_PENDING",
+              "PARTIALLY_REFUNDED",
+              "REFUNDED",
+              "DISPUTED"
+            ]
+          },
+          "stay_status": {
+            "type": "string",
+            "enum": [
+              "NOT_ARRIVED",
+              "CHECKED_IN",
+              "CHECKED_OUT",
+              "NO_SHOW"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quote_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "booking_id",
+          "guest_id",
+          "apartment_id",
+          "check_in",
+          "check_out",
+          "status",
+          "payment_status",
+          "stay_status",
+          "version",
+          "external_id",
+          "quote_id"
+        ],
+        "additionalProperties": false
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "ASSIGNED",
+              "IN_PROGRESS",
+              "WAITING_GUEST",
+              "WAITING_VENDOR",
+              "RESOLVED",
+              "CLOSED"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "S1",
+              "S2",
+              "S3",
+              "S4"
+            ]
+          },
+          "assigned_team": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "severity",
+          "assigned_team",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "Place": {
+        "type": "object",
+        "properties": {
+          "place_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "opening_hours": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "booking_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          }
+        },
+        "required": [
+          "place_id",
+          "name",
+          "address",
+          "source_url",
+          "observed_at",
+          "opening_hours",
+          "booking_url"
+        ],
+        "additionalProperties": false
+      },
+      "Route": {
+        "type": "object",
+        "properties": {
+          "route_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "to": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "WALK",
+                    "TRANSIT",
+                    "TAXI",
+                    "CAR"
+                  ]
+                },
+                "duration_minutes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "mode",
+                "duration_minutes",
+                "source"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 100
+          },
+          "map_url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "route_id",
+          "legs",
+          "map_url",
+          "observed_at"
+        ],
+        "additionalProperties": false
+      },
+      "Document": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "ACTIVE",
+              "ARCHIVED"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "document_id",
+          "title",
+          "version",
+          "valid_from",
+          "valid_until",
+          "status",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SUCCEEDED",
+              "FAILED",
+              "UNKNOWN"
+            ]
+          },
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "operation_id",
+          "status",
+          "resource_id",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "Confirmation": {
+        "type": "object",
+        "properties": {
+          "confirmation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "payload_hash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "CONFIRMED",
+              "EXPIRED",
+              "CONSUMED"
+            ]
+          }
+        },
+        "required": [
+          "confirmation_id",
+          "action",
+          "payload_hash",
+          "expires_at",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delivery_status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "SENT",
+              "DELIVERED",
+              "FAILED",
+              "UNKNOWN"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "provider_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "message_id",
+          "delivery_status",
+          "channel",
+          "provider_message_id"
+        ],
+        "additionalProperties": false
+      },
+      "Benefit": {
+        "type": "object",
+        "properties": {
+          "benefit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "terms_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "value": {
+            "$ref": "#/$defs/Money"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "benefit_id",
+          "name",
+          "terms_version",
+          "value",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "Followup": {
+        "type": "object",
+        "properties": {
+          "followup_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guest_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trigger_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "channel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "SCHEDULED",
+              "CLAIMED",
+              "SENT",
+              "CANCELLED",
+              "SUPPRESSED",
+              "FAILED"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "SERVICE",
+              "MARKETING"
+            ]
+          }
+        },
+        "required": [
+          "followup_id",
+          "guest_id",
+          "trigger_at",
+          "channel",
+          "status",
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "Metric": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date"
+          },
+          "definition_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "unit",
+          "period_start",
+          "period_end",
+          "definition_version"
+        ],
+        "additionalProperties": false
+      },
+      "SearchCriteria": {
+        "type": "object",
+        "properties": {
+          "check_in": {
+            "type": "string",
+            "format": "date"
+          },
+          "check_out": {
+            "type": "string",
+            "format": "date"
+          },
+          "adults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "children": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget_per_night": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rooms_min": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "beds_required": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "check_in",
+          "check_out",
+          "adults",
+          "children",
+          "requirements"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "metrics": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Metric"
+                },
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "metrics"
+            ],
+            "additionalProperties": false
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "ok",
+          "request_id",
+          "data",
+          "source",
+          "observed_at"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "TIMEOUT",
+                  "AUTH_ERROR",
+                  "FORBIDDEN",
+                  "RATE_LIMIT",
+                  "VALIDATION_ERROR",
+                  "NOT_FOUND",
+                  "CONFLICT",
+                  "SERVER_ERROR",
+                  "UNKNOWN_RESULT",
+                  "CAPABILITY_DISABLED",
+                  "STALE_QUOTE",
+                  "CONSENT_REQUIRED"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "operation_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable",
+              "operation_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ok",
+          "request_id",
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "server_policy": {
+    "identity": "verified",
+    "authorization": "object_scope_check",
+    "timeout_seconds": 10,
+    "retries": 2,
+    "idempotency_required": false,
+    "exposure": "role_filtered",
+    "availability": "disabled_until_adapter_implemented"
+  }
+}

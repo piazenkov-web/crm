@@ -1,0 +1,6 @@
+# Version families for the contract harness only. Resolve and lock exact patched
+# versions in CI for Python 3.12 before production deployment.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+jsonschema>=4.23,<5
+httpx>=0.27,<1
