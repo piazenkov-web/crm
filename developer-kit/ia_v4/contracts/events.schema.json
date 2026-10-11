@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "booking.requested",
+        "booking.provider_pending",
+        "booking.confirmed",
+        "booking.changed",
+        "booking.cancel_pending",
+        "booking.cancelled",
+        "booking.expired",
+        "booking.rejected",
+        "booking.deleted",
+        "payment.pending",
+        "payment.succeeded",
+        "payment.failed",
+        "payment.refund_requested",
+        "payment.refunded",
+        "payment.disputed",
+        "deposit.received",
+        "deposit.returned",
+        "guest.created",
+        "guest.preference_saved",
+        "consent.granted",
+        "consent.revoked",
+        "conversation.started",
+        "message.queued",
+        "message.sent",
+        "message.delivered",
+        "message.failed",
+        "service_request.created",
+        "service_request.assigned",
+        "service_request.resolved",
+        "incident.created",
+        "handoff.requested",
+        "stay.checked_in",
+        "stay.checked_out",
+        "stay.no_show",
+        "followup.scheduled",
+        "followup.suppressed",
+        "followup.sent",
+        "feedback.recorded",
+        "referral.attributed",
+        "corporate.approval_requested",
+        "corporate.approved",
+        "corporate.rejected",
+        "knowledge.published",
+        "integration.sync_failed"
+      ]
+    },
+    "schema_version": {
+      "const": "4.0"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "aggregate_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "aggregate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "aggregate_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "received_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "correlation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "resource_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "maxItems": 100
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "resource_id",
+        "state",
+        "changed_fields",
+        "reason_codes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "tenant_id",
+    "aggregate_type",
+    "aggregate_id",
+    "aggregate_version",
+    "occurred_at",
+    "received_at",
+    "source",
+    "correlation_id",
+    "causation_id",
+    "data"
+  ],
+  "additionalProperties": false
+}

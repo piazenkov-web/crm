@@ -1,0 +1,74 @@
+[
+  {
+    "name": "celery",
+    "path": "welcome/programs/celery",
+    "commit": "357e629eb6bc07284bc6677fb32ffb471e2faf62",
+    "url": "https://github.com/celery/celery.git"
+  },
+  {
+    "name": "chatwoot",
+    "path": "welcome/programs/chatwoot",
+    "commit": "807e9ed67ad00048d47c878c1945349391172b6b",
+    "url": "https://github.com/chatwoot/chatwoot.git"
+  },
+  {
+    "name": "dify",
+    "path": "welcome/programs/dify",
+    "commit": "2b65f0e8930964ce2be9e7054dde5a2cd74ff605",
+    "url": "https://github.com/langgenius/dify.git"
+  },
+  {
+    "name": "erpnext",
+    "path": "welcome/programs/erpnext",
+    "commit": "5727f71cb639bb03a3a77c3ad1ae498723a35f5b",
+    "url": "https://github.com/frappe/erpnext.git"
+  },
+  {
+    "name": "espocrm",
+    "path": "welcome/programs/espocrm",
+    "commit": "b4ceb64f732250ebe5e46c31360aa181b629ad10",
+    "url": "https://github.com/espocrm/espocrm.git"
+  },
+  {
+    "name": "keycloak",
+    "path": "welcome/programs/keycloak",
+    "commit": "c7de391ae4d8a83ad62b8386cab85d37fbb6324c",
+    "url": "https://github.com/keycloak/keycloak.git"
+  },
+  {
+    "name": "langgraph",
+    "path": "welcome/programs/langgraph",
+    "commit": "93f5eaff21bcc183044b0980a8844b9b7a1275a8",
+    "url": "https://github.com/langchain-ai/langgraph.git"
+  },
+  {
+    "name": "livekit-agents",
+    "path": "welcome/programs/livekit-agents",
+    "commit": "484310293ecd71de94cba597ad4f23a1a38a0c47",
+    "url": "https://github.com/livekit/agents.git"
+  },
+  {
+    "name": "n8n",
+    "path": "welcome/programs/n8n",
+    "commit": "6fc0aeda35ea62ee353dd80b0f8d3e0f1f4e50d0",
+    "url": "https://github.com/n8n-io/n8n.git"
+  },
+  {
+    "name": "pgvector",
+    "path": "welcome/programs/pgvector",
+    "commit": "f37c13f68b57d2c3472b2214fbcff699d6d34876",
+    "url": "https://github.com/pgvector/pgvector.git"
+  },
+  {
+    "name": "qloapps",
+    "path": "welcome/programs/qloapps",
+    "commit": "df9353809099d46652c1300d7881f070a43dec34",
+    "url": "https://github.com/Qloapps/QloApps.git"
+  },
+  {
+    "name": "superset",
+    "path": "welcome/programs/superset",
+    "commit": "34b3d65cc208600e0152017ba0db705a3d2b57bd",
+    "url": "https://github.com/apache/superset.git"
+  }
+]

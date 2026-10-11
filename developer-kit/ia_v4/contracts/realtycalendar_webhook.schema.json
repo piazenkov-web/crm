@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Минимальный tolerant boundary contract по официальной документации RC, не полный контракт всех полей. Новые поля принимаются, но не передаются LLM автоматически.",
+  "type": "object",
+  "required": [
+    "action",
+    "status",
+    "data"
+  ],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "create_booking",
+        "update_booking",
+        "cancel_booking",
+        "delete_booking"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "booked",
+        "deleted",
+        "canceled",
+        "request"
+      ]
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "booking"
+      ],
+      "properties": {
+        "booking": {
+          "type": "object",
+          "required": [
+            "id",
+            "agency_id"
+          ],
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agency_id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "realty_id": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "begin_date": {
+              "type": "string",
+              "format": "date"
+            },
+            "end_date": {
+              "type": "string",
+              "format": "date"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "amount": {
+              "type": "integer"
+            },
+            "status_cd": {
+              "type": "integer"
+            },
+            "is_delete": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        },
+        "changes": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

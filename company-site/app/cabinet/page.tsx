@@ -1,0 +1,4 @@
+import {getChatGPTUser,chatGPTSignInPath,chatGPTSignOutPath} from '../chatgpt-auth';
+import Dashboard from './dashboard';
+export const dynamic='force-dynamic';
+export default async function Cabinet(){const u=await getChatGPTUser();return <main><header><a href="/index.html">WELCOME MOSCOW</a><a href="/index.html#catalog">Подобрать квартиру ↗</a></header>{u?<><p>{u.displayName} · <a href={chatGPTSignOutPath('/cabinet')} target="_top">Выйти</a></p><Dashboard/></>:<section><h1>Личные кабинеты</h1><p>Компания · Гость · Собственник</p><p>Поездки, документы и вознаграждение 5% от оплаченной суммы бронирования.</p><a className="button" href={chatGPTSignInPath('/cabinet')} target="_top">Войти через ChatGPT</a><p>Данные кабинета доступны только вашему аккаунту. Доступ к бронированиям и квартирам назначается отдельно после проверки.</p></section>}</main>}

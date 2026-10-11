@@ -1,4 +1,12 @@
 .env
+.env.*
+!.env.example
+node_modules/
+.next/
+.vinext/
+.wrangler/
+.sites-runtime/
+*.tsbuildinfo
 data/
 __pycache__/
 *.tar.gz

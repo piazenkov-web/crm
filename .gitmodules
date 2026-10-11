@@ -1,0 +1,36 @@
+[submodule "welcome/programs/espocrm"]
+	path = welcome/programs/espocrm
+	url = https://github.com/espocrm/espocrm.git
+[submodule "welcome/programs/chatwoot"]
+	path = welcome/programs/chatwoot
+	url = https://github.com/chatwoot/chatwoot.git
+[submodule "welcome/programs/langgraph"]
+	path = welcome/programs/langgraph
+	url = https://github.com/langchain-ai/langgraph.git
+[submodule "welcome/programs/superset"]
+	path = welcome/programs/superset
+	url = https://github.com/apache/superset.git
+[submodule "welcome/programs/pgvector"]
+	path = welcome/programs/pgvector
+	url = https://github.com/pgvector/pgvector.git
+[submodule "welcome/programs/celery"]
+	path = welcome/programs/celery
+	url = https://github.com/celery/celery.git
+[submodule "welcome/programs/livekit-agents"]
+	path = welcome/programs/livekit-agents
+	url = https://github.com/livekit/agents.git
+[submodule "welcome/programs/dify"]
+	path = welcome/programs/dify
+	url = https://github.com/langgenius/dify.git
+[submodule "welcome/programs/erpnext"]
+	path = welcome/programs/erpnext
+	url = https://github.com/frappe/erpnext.git
+[submodule "welcome/programs/qloapps"]
+	path = welcome/programs/qloapps
+	url = https://github.com/Qloapps/QloApps.git
+[submodule "welcome/programs/keycloak"]
+	path = welcome/programs/keycloak
+	url = https://github.com/keycloak/keycloak.git
+[submodule "welcome/programs/n8n"]
+	path = welcome/programs/n8n
+	url = https://github.com/n8n-io/n8n.git
