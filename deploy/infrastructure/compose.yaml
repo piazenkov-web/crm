@@ -1,0 +1,39 @@
+name: welcome-platform-infra
+services:
+  postgres:
+    image: pgvector/pgvector@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: welcome
+      POSTGRES_USER: welcome
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate the local .env using bootstrap.sh}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U welcome -d welcome']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Generate the local .env using bootstrap.sh}
+    command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis-data:/data
+    networks: [backend]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  postgres-data:
+  redis-data:
+networks:
+  backend:
+    internal: true
