@@ -10,7 +10,7 @@
 | Каталог | Содержание |
 | --- | --- |
 | Корень | Существующая CRM из ветки welcomemoscow |
-| company-site/ | Исходники сайта и кабинета Welcome Moscow |
+| welcomemoscow/site/ | Исходники сайта и кабинета Welcome Moscow |
 | company-starter/ | Исходный стартовый шаблон сайта |
 | welcome/ | Описание платформы и план интеграции |
 | welcome/docs/IMPLEMENTATION_GUIDE_RU.md | Руководство и последовательность 90 рабочих дней |
@@ -18,7 +18,7 @@
 | welcome/components-lock.json | Адреса репозиториев и коммиты компонентов |
 | developer-kit/ia_v4/ | Комплект разработчика v4.0: спецификации, контракты и каркас |
 | docs/source/ | Исходные PDF с требованиями |
-| research/ | Извлечённые требования и материалы анализа |
+| welcomemoscow/research/ | Извлечённые требования и материалы анализа |
 
 Руководство: [план реализации и тестирования](../welcome/docs/IMPLEMENTATION_GUIDE_RU.md).
 
